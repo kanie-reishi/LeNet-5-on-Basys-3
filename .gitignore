@@ -1,0 +1,18 @@
+docs/
+build/
+RTL_reference/
+TB_reference/
+AGENTS.md
+tb/hex
+Software/model/__pycache__/
+Software/model/checkpoint/
+
+# Temporary logs and outputs
+*.log
+sim_output*.txt
+sim_output*.log
+
+# Checkpoints and datasets
+checkpoint/
+data/
+weights/
