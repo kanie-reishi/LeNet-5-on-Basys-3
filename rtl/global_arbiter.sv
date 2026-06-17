@@ -1,216 +1,251 @@
 `timescale 1 ns / 1 ps
 
-module global_arbiter #(
-    parameter int AWIDTH           = 10,
-    parameter int INST_DWIDTH      = 64,
-    parameter int AXI_WADDR_WIDTH  = 13,
-    parameter int AXI_RADDR_WIDTH  = 13,
-    parameter int AXI_WDATA_DWIDTH = 80,
-    parameter int AXI_RDATA_DWIDTH = 80
+module Global_Arbiter #(
+    parameter AXI_ADDR_WIDTH    = 13,
+    parameter AXI_DATA_DWIDTH   = 16,
+    parameter MEM_ADDR_WIDTH    = 10,
+    parameter MEM_DATA_DWIDTH   = 80,
+    parameter DWIDTH            = 16,
+    parameter NBANKS            = 5
 )(
-    input  logic                            CLK,
-    input  logic                            RST, // Active-low asynchronous reset
+    input  wire                         CLK,
+    input  wire                         RST,
 
-    //================================//
-    //          AXI-Lite Like         //
-    //================================//
-    input  logic [AXI_WADDR_WIDTH-1:0]      axi_waddr_i,
-    input  logic [AXI_WDATA_DWIDTH-1:0]     axi_wdata_i,
-    input  logic                            axi_wvalid_i,
+    input  wire [AXI_ADDR_WIDTH-1:0]    axi_waddr_i,
+    input  wire [AXI_DATA_DWIDTH-1:0]   axi_wdata_i,
+    input  wire                         axi_wvalid_i,
 
-    input  logic [AXI_RADDR_WIDTH-1:0]      axi_raddr_i,
-    input  logic                            axi_arvalid_i,
-    output logic [AXI_RDATA_DWIDTH-1:0]     axi_rdata_o,
+    input  wire [AXI_ADDR_WIDTH-1:0]    axi_raddr_i,
+    input  wire                         axi_arvalid_i,
+    output reg  [AXI_DATA_DWIDTH-1:0]   axi_rdata_o,
 
-    //================================//
-    //        Direct Control Path      //
-    //================================//
-    input  logic                            direct_load_i,
-    input  logic                            direct_start_i,
-    input  logic                            direct_done_i,
+    input  wire [2:0]                   ctrl_state_i,
+    input  wire                         ctrl_done_i,
+    input  wire                         predict_valid_i,
+    input  wire [3:0]                   predict_value_i,
 
-    //================================//
-    //         From Controller        //
-    //================================//
-    input  logic [2:0]                      state_i,
-    input  logic                            completed_i,
+    output reg                          load_done_o,
+    output reg                          start_o,
+    output reg                          done_clear_o,
 
-    //================================//
-    //         To Controller          //
-    //================================//
-    output logic                            load_flag_o,
-    output logic                            start_flag_o,
-    output logic                            done_flag_o,
-    output logic [AWIDTH-1:0]               max_IM_addr_o,
+    output reg                          ping_fm_wvalid_o,
+    output reg  [MEM_ADDR_WIDTH-1:0]    ping_fm_waddr_o,
+    output reg  [MEM_DATA_DWIDTH-1:0]   ping_fm_wdata_o,
+    output wire                         ping_fm_arvalid_o,
+    output wire [MEM_ADDR_WIDTH-1:0]    ping_fm_raddr_o,
+    input  wire [MEM_DATA_DWIDTH-1:0]   ping_fm_rdata_i,
 
-    //================================//
-    //        To Instruction Mem      //
-    //================================//
-    output logic                            arbiter_IM_wvalid_o,
-    output logic [AWIDTH-1:0]               arbiter_IM_waddr_o,
-    output logic [INST_DWIDTH-1:0]          arbiter_IM_wdata_o,
+    output reg                          pong_fm_wvalid_o,
+    output reg  [MEM_ADDR_WIDTH-1:0]    pong_fm_waddr_o,
+    output reg  [MEM_DATA_DWIDTH-1:0]   pong_fm_wdata_o,
+    output wire                         pong_fm_arvalid_o,
+    output wire [MEM_ADDR_WIDTH-1:0]    pong_fm_raddr_o,
+    input  wire [MEM_DATA_DWIDTH-1:0]   pong_fm_rdata_i,
 
-    //================================//
-    //         To Ping FM Mem         //
-    //================================//
-    output logic                            arbiter_Ping_FM_wvalid_o,
-    output logic [AWIDTH-1:0]               arbiter_Ping_FM_waddr_o,
-    output logic [AXI_WDATA_DWIDTH-1:0]     arbiter_Ping_FM_wdata_o,
+    output reg                          weight_wvalid_o,
+    output reg  [MEM_ADDR_WIDTH-1:0]    weight_waddr_o,
+    output reg  [MEM_DATA_DWIDTH-1:0]   weight_wdata_o,
 
-    output logic                            arbiter_Ping_FM_arvalid_o,
-    output logic [AWIDTH-1:0]               arbiter_Ping_FM_raddr_o,
-    input  logic [AXI_RDATA_DWIDTH-1:0]     arbiter_Ping_FM_rdata_i,
-
-    //================================//
-    //         To Pong FM Mem         //
-    //================================//
-    output logic                            arbiter_Pong_FM_wvalid_o,
-    output logic [AWIDTH-1:0]               arbiter_Pong_FM_waddr_o,
-    output logic [AXI_WDATA_DWIDTH-1:0]     arbiter_Pong_FM_wdata_o,
-
-    output logic                            arbiter_Pong_FM_arvalid_o,
-    output logic [AWIDTH-1:0]               arbiter_Pong_FM_raddr_o,
-    input  logic [AXI_RDATA_DWIDTH-1:0]     arbiter_Pong_FM_rdata_i,
-
-    //================================//
-    //        To Weight Memory        //
-    //================================//
-    output logic                            arbiter_WM_wvalid_o,
-    output logic [AWIDTH-1:0]               arbiter_WM_waddr_o,
-    output logic [AXI_WDATA_DWIDTH-1:0]     arbiter_WM_wdata_o,
-
-    //================================//
-    //         To Bias Memory         //
-    //================================//
-    output logic                            arbiter_BM_wvalid_o,
-    output logic [AWIDTH-1:0]               arbiter_BM_waddr_o,
-    output logic [AXI_WDATA_DWIDTH-1:0]     arbiter_BM_wdata_o
+    output wire                         bias_wvalid_o,
+    output wire [MEM_ADDR_WIDTH-1:0]    bias_waddr_o,
+    output wire [DWIDTH-1:0]            bias_wdata_o
 );
 
     //-------------------------------------//
-    //            Localparams              //
+    // Address Map
     //-------------------------------------//
-    typedef enum logic [2:0] {
-        s_IDLE   = 3'd0,
-        s_LOAD   = 3'd1,
-        s_FETCH  = 3'd2,
-        s_DECODE = 3'd3,
-        s_EXEC   = 3'd4,
-        s_READ   = 3'd5
-    } state_t;
+    localparam [2:0] W_LOAD_CTRL = 3'd0;
+    localparam [2:0] W_START     = 3'd1;
+    localparam [2:0] W_DONE_CLR  = 3'd2;
+    localparam [2:0] W_PING_FM   = 3'd3;
+    localparam [2:0] W_PONG_FM   = 3'd4;
+    localparam [2:0] W_WEIGHT    = 3'd5;
+    localparam [2:0] W_BIAS      = 3'd6;
 
-    localparam [2:0] AXI_WADDR_LOAD      = 3'd0;
-    localparam [2:0] AXI_WADDR_START     = 3'd1;
-    localparam [2:0] AXI_WADDR_DONE      = 3'd2;
-    localparam [2:0] AXI_WADDR_PING_FMAP = 3'd3;
-    localparam [2:0] AXI_WADDR_PONG_FMAP = 3'd4;
-    localparam [2:0] AXI_WADDR_WEIGHT    = 3'd5;
-    localparam [2:0] AXI_WADDR_BIAS      = 3'd6;
-    localparam [2:0] AXI_WADDR_INST      = 3'd7;
-
-    localparam [2:0] AXI_RADDR_COMPLETE  = 3'd0;
-    localparam [2:0] AXI_RADDR_PING_FMAP = 3'd1;
-    localparam [2:0] AXI_RADDR_PONG_FMAP = 3'd2;
-    localparam [2:0] AXI_RADDR_STATE     = 3'd3;
+    localparam [2:0] R_STATUS    = 3'd0;
+    localparam [2:0] R_PING_FM   = 3'd1;
+    localparam [2:0] R_PONG_FM   = 3'd2;
 
     //-------------------------------------//
-    //          Wire Declarations          //
+    // Wire Declarations
     //-------------------------------------//
-    logic [2:0]                             axi_waddr_sel_w;
-    logic [2:0]                             axi_raddr_sel_w;
-    logic [2:0]                             axi_raddr_sel_delay_w;
+    wire [2:0] w_sel_w;
+    wire [2:0] r_sel_w;
 
-    logic                                   axi_load_flag_w;
-    logic                                   axi_start_flag_w;
-    logic                                   axi_done_flag_w;
+    localparam AXI_WORD_ADDR_WIDTH = AXI_ADDR_WIDTH - 3;
 
-    logic                                   load_state_w;
-    logic                                   read_state_w;
+    wire [AXI_WORD_ADDR_WIDTH-1:0] axi_word_addr_w;
+    wire [MEM_ADDR_WIDTH-1:0] mem_pack_addr_w;
+    wire [2:0]                bank_sel_w;
 
-    logic [AXI_RADDR_WIDTH-1:0]             axi_raddr_r;
-    logic [AWIDTH-1:0]                      max_IM_addr_r;
+    wire write_ping_w;
+    wire write_pong_w;
+    wire write_weight_w;
 
-    //-------------------------------------//
-    //               Decode               //
-    //-------------------------------------//
-    assign axi_waddr_sel_w        = axi_waddr_i[AXI_WADDR_WIDTH-1:AWIDTH];
-    assign axi_raddr_sel_w        = axi_raddr_i[AXI_RADDR_WIDTH-1:AWIDTH];
-    assign axi_raddr_sel_delay_w  = axi_raddr_r[AXI_RADDR_WIDTH-1:AWIDTH];
- 
-    assign axi_load_flag_w        = axi_wvalid_i && (axi_waddr_sel_w == AXI_WADDR_LOAD)  && axi_wdata_i[0];
-    assign axi_start_flag_w       = axi_wvalid_i && (axi_waddr_sel_w == AXI_WADDR_START) && axi_wdata_i[0];
-    assign axi_done_flag_w        = axi_wvalid_i && (axi_waddr_sel_w == AXI_WADDR_DONE)  && axi_wdata_i[0];
-
-    assign load_flag_o            = direct_load_i  | axi_load_flag_w;
-    assign start_flag_o           = direct_start_i | axi_start_flag_w;
-    assign done_flag_o            = direct_done_i  | axi_done_flag_w;
-
-    assign load_state_w           = (state_i == 3'd1); // s_LOAD
-    assign read_state_w           = (state_i == 3'd6); // s_READ
+    wire read_ping_w;
+    wire read_pong_w;
 
     //-------------------------------------//
-    //         Write Decode Path           //
+    // Register Declarations
     //-------------------------------------//
-    assign arbiter_BM_wvalid_o      = load_state_w && axi_wvalid_i && (axi_waddr_sel_w == AXI_WADDR_BIAS);
-    assign arbiter_BM_waddr_o       = axi_waddr_i[AWIDTH-1:0];
-    assign arbiter_BM_wdata_o       = axi_wdata_i;
+    reg [MEM_DATA_DWIDTH-1:0] ping_pack_r;
+    reg [MEM_DATA_DWIDTH-1:0] pong_pack_r;
+    reg [MEM_DATA_DWIDTH-1:0] weight_pack_r;
 
-    assign arbiter_WM_wvalid_o      = load_state_w && axi_wvalid_i && (axi_waddr_sel_w == AXI_WADDR_WEIGHT);
-    assign arbiter_WM_waddr_o       = axi_waddr_i[AWIDTH-1:0];
-    assign arbiter_WM_wdata_o       = axi_wdata_i;
-
-    assign arbiter_IM_wvalid_o      = load_state_w && axi_wvalid_i && (axi_waddr_sel_w == AXI_WADDR_INST);
-    assign arbiter_IM_waddr_o       = axi_waddr_i[AWIDTH-1:0];
-    assign arbiter_IM_wdata_o       = axi_wdata_i[INST_DWIDTH-1:0];
-
-    assign arbiter_Ping_FM_wvalid_o = load_state_w && axi_wvalid_i && (axi_waddr_sel_w == AXI_WADDR_PING_FMAP);
-    assign arbiter_Ping_FM_waddr_o  = axi_waddr_i[AWIDTH-1:0];
-    assign arbiter_Ping_FM_wdata_o  = axi_wdata_i;
-
-    assign arbiter_Pong_FM_wvalid_o = load_state_w && axi_wvalid_i && (axi_waddr_sel_w == AXI_WADDR_PONG_FMAP);
-    assign arbiter_Pong_FM_waddr_o  = axi_waddr_i[AWIDTH-1:0];
-    assign arbiter_Pong_FM_wdata_o  = axi_wdata_i;
+    reg [2:0]                 r_sel_d1_r;
+    reg [2:0]                 r_bank_d1_r;
 
     //-------------------------------------//
-    //           Read Decode Path          //
+    // Decode
     //-------------------------------------//
-    assign arbiter_Ping_FM_arvalid_o = read_state_w && axi_arvalid_i && (axi_raddr_sel_w == AXI_RADDR_PING_FMAP);
-    assign arbiter_Ping_FM_raddr_o   = axi_raddr_i[AWIDTH-1:0];
+    // Address format is {3-bit region select, AXI_WORD_ADDR_WIDTH-bit linear word address}.
+    // MEM_ADDR_WIDTH is the packed memory address width, not the AXI word-address width.
+    assign w_sel_w         = axi_waddr_i[AXI_ADDR_WIDTH-1:AXI_WORD_ADDR_WIDTH];
+    assign r_sel_w         = axi_raddr_i[AXI_ADDR_WIDTH-1:AXI_WORD_ADDR_WIDTH];
 
-    assign arbiter_Pong_FM_arvalid_o = read_state_w && axi_arvalid_i && (axi_raddr_sel_w == AXI_RADDR_PONG_FMAP);
-    assign arbiter_Pong_FM_raddr_o   = axi_raddr_i[AWIDTH-1:0];
+    assign axi_word_addr_w = axi_waddr_i[AXI_WORD_ADDR_WIDTH-1:0];
+    assign mem_pack_addr_w = axi_word_addr_w / NBANKS;
+    assign bank_sel_w      = axi_word_addr_w % NBANKS;
+
+    assign write_ping_w    = axi_wvalid_i && (w_sel_w == W_PING_FM);
+    assign write_pong_w    = axi_wvalid_i && (w_sel_w == W_PONG_FM);
+    assign write_weight_w  = axi_wvalid_i && (w_sel_w == W_WEIGHT);
+
+    assign bias_wvalid_o   = axi_wvalid_i && (w_sel_w == W_BIAS);
+    assign bias_waddr_o    = axi_word_addr_w[MEM_ADDR_WIDTH-1:0];
+    assign bias_wdata_o    = axi_wdata_i;
+
+    assign read_ping_w     = 1'b0;
+    assign read_pong_w     = 1'b0;
 
     //-------------------------------------//
-    //           Max IM Address            //
+    // Pulse Flags To Controller
     //-------------------------------------//
-    always_ff @(posedge CLK or negedge RST) begin
+    always @(posedge CLK or negedge RST) begin
         if (!RST) begin
-            max_IM_addr_r <= {AWIDTH{1'b0}};
-            axi_raddr_r   <= {AXI_RADDR_WIDTH{1'b0}};
+            load_done_o  <= 1'b0;
+            start_o      <= 1'b0;
+            done_clear_o <= 1'b0;
         end
         else begin
-            axi_raddr_r   <= axi_raddr_i;
-            if (arbiter_IM_wvalid_o) begin
-                if (arbiter_IM_waddr_o >= max_IM_addr_r) begin
-                    max_IM_addr_r <= arbiter_IM_waddr_o;
+            if (axi_wvalid_i && (w_sel_w == W_LOAD_CTRL)) begin
+                load_done_o <= axi_wdata_i[0];
+            end
+            else begin
+                load_done_o <= 1'b0;
+            end
+
+            if (axi_wvalid_i && (w_sel_w == W_START)) begin
+                start_o <= axi_wdata_i[0];
+            end
+            else begin
+                start_o <= 1'b0;
+            end
+
+            if (axi_wvalid_i && (w_sel_w == W_DONE_CLR)) begin
+                done_clear_o <= axi_wdata_i[0];
+            end
+            else begin
+                done_clear_o <= 1'b0;
+            end
+        end
+    end
+
+    //-------------------------------------//
+    // 16-bit AXI Write Packing To 5 Banks
+    //-------------------------------------//
+    always @(posedge CLK or negedge RST) begin
+        if (!RST) begin
+            ping_pack_r      <= {MEM_DATA_DWIDTH{1'b0}};
+            pong_pack_r      <= {MEM_DATA_DWIDTH{1'b0}};
+            weight_pack_r    <= {MEM_DATA_DWIDTH{1'b0}};
+
+            ping_fm_wvalid_o <= 1'b0;
+            ping_fm_waddr_o  <= {MEM_ADDR_WIDTH{1'b0}};
+            ping_fm_wdata_o  <= {MEM_DATA_DWIDTH{1'b0}};
+
+            pong_fm_wvalid_o <= 1'b0;
+            pong_fm_waddr_o  <= {MEM_ADDR_WIDTH{1'b0}};
+            pong_fm_wdata_o  <= {MEM_DATA_DWIDTH{1'b0}};
+
+            weight_wvalid_o  <= 1'b0;
+            weight_waddr_o   <= {MEM_ADDR_WIDTH{1'b0}};
+            weight_wdata_o   <= {MEM_DATA_DWIDTH{1'b0}};
+        end
+        else begin
+            ping_fm_wvalid_o <= 1'b0;
+            pong_fm_wvalid_o <= 1'b0;
+            weight_wvalid_o  <= 1'b0;
+
+            if (write_ping_w) begin
+                ping_pack_r[(bank_sel_w*DWIDTH) +: DWIDTH] <= axi_wdata_i;
+
+                if (bank_sel_w == NBANKS-1) begin
+                    ping_fm_wvalid_o <= 1'b1;
+                    ping_fm_waddr_o  <= mem_pack_addr_w;
+                    ping_fm_wdata_o  <= {axi_wdata_i,
+                                          ping_pack_r[(3*DWIDTH) +: DWIDTH],
+                                          ping_pack_r[(2*DWIDTH) +: DWIDTH],
+                                          ping_pack_r[(1*DWIDTH) +: DWIDTH],
+                                          ping_pack_r[(0*DWIDTH) +: DWIDTH]};
+                end
+            end
+
+            if (write_pong_w) begin
+                pong_pack_r[(bank_sel_w*DWIDTH) +: DWIDTH] <= axi_wdata_i;
+
+                if (bank_sel_w == NBANKS-1) begin
+                    pong_fm_wvalid_o <= 1'b1;
+                    pong_fm_waddr_o  <= mem_pack_addr_w;
+                    pong_fm_wdata_o  <= {axi_wdata_i,
+                                          pong_pack_r[(3*DWIDTH) +: DWIDTH],
+                                          pong_pack_r[(2*DWIDTH) +: DWIDTH],
+                                          pong_pack_r[(1*DWIDTH) +: DWIDTH],
+                                          pong_pack_r[(0*DWIDTH) +: DWIDTH]};
+                end
+            end
+
+            if (write_weight_w) begin
+                weight_pack_r[(bank_sel_w*DWIDTH) +: DWIDTH] <= axi_wdata_i;
+
+                if (bank_sel_w == NBANKS-1) begin
+                    weight_wvalid_o <= 1'b1;
+                    weight_waddr_o  <= mem_pack_addr_w;
+                    weight_wdata_o  <= {axi_wdata_i,
+                                         weight_pack_r[(3*DWIDTH) +: DWIDTH],
+                                         weight_pack_r[(2*DWIDTH) +: DWIDTH],
+                                         weight_pack_r[(1*DWIDTH) +: DWIDTH],
+                                         weight_pack_r[(0*DWIDTH) +: DWIDTH]};
                 end
             end
         end
     end
 
-    assign max_IM_addr_o = max_IM_addr_r;
+    //-------------------------------------//
+    // 16-bit AXI Read: prediction result only
+    //-------------------------------------//
+    // Any AXI read returns:
+    //   bit [0]   : predict_valid_i
+    //   bit [4:1] : predict_value_i
+    // Other bits are zero.
+    // The prediction registers are held in CNN_Core after ArgMax finishes.
+    assign ping_fm_arvalid_o = 1'b0;
+    assign pong_fm_arvalid_o = 1'b0;
 
-    //-------------------------------------//
-    //             AXI Read                //
-    //-------------------------------------//
-    always_comb begin
-        case (axi_raddr_sel_delay_w)
-            AXI_RADDR_COMPLETE:  axi_rdata_o = {{(AXI_RDATA_DWIDTH-1){1'b0}}, completed_i};
-            AXI_RADDR_PING_FMAP: axi_rdata_o = arbiter_Ping_FM_rdata_i;
-            AXI_RADDR_PONG_FMAP: axi_rdata_o = arbiter_Pong_FM_rdata_i;
-            AXI_RADDR_STATE:     axi_rdata_o = {{(AXI_RDATA_DWIDTH-3){1'b0}}, state_i};
-            default:             axi_rdata_o = {AXI_RDATA_DWIDTH{1'b0}};
-        endcase
+    assign ping_fm_raddr_o   = {MEM_ADDR_WIDTH{1'b0}};
+    assign pong_fm_raddr_o   = {MEM_ADDR_WIDTH{1'b0}};
+
+    always @(posedge CLK or negedge RST) begin
+        if (!RST) begin
+            axi_rdata_o <= {AXI_DATA_DWIDTH{1'b0}};
+        end
+        else begin
+            if (axi_arvalid_i) begin
+                axi_rdata_o      <= {AXI_DATA_DWIDTH{1'b0}};
+                axi_rdata_o[0]   <= predict_valid_i;
+                axi_rdata_o[4:1] <= predict_value_i;
+            end
+        end
     end
 
 endmodule

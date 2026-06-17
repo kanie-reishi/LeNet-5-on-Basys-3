@@ -1,0 +1,68 @@
+{
+  "format": "Q8.8 int16",
+  "frac_bits": 8,
+  "scale": 256,
+  "qmin": -32768,
+  "qmax": 32767,
+  "layers": {
+    "conv1.weight": {
+      "shape": [
+        8,
+        1,
+        5,
+        5
+      ]
+    },
+    "conv1.bias": {
+      "shape": [
+        8
+      ]
+    },
+    "conv2.weight": {
+      "shape": [
+        20,
+        8,
+        5,
+        5
+      ]
+    },
+    "conv2.bias": {
+      "shape": [
+        20
+      ]
+    },
+    "fc1.weight": {
+      "shape": [
+        128,
+        320
+      ]
+    },
+    "fc1.bias": {
+      "shape": [
+        128
+      ]
+    },
+    "fc2.weight": {
+      "shape": [
+        84,
+        128
+      ]
+    },
+    "fc2.bias": {
+      "shape": [
+        84
+      ]
+    },
+    "fc3.weight": {
+      "shape": [
+        10,
+        84
+      ]
+    },
+    "fc3.bias": {
+      "shape": [
+        10
+      ]
+    }
+  }
+}

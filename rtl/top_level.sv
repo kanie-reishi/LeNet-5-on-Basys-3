@@ -49,43 +49,22 @@ module top_level #(
     );
 
     //================================================================//
-    // AXI Bus sharing between UART Bridge and Argmax Unit
+    // AXI Bus between UART Bridge and CNN Core
     //================================================================//
-    wire [12:0] bridge_axi_waddr_w;
-    wire [79:0] bridge_axi_wdata_w;
-    wire        bridge_axi_wvalid_w;
-
-    wire [12:0] bridge_axi_raddr_w;
-    wire        bridge_axi_arvalid_w;
-
-    wire [12:0] argmax_axi_raddr_w;
-    wire        argmax_axi_arvalid_w;
-    wire        argmax_busy_w;
-
-    // AXI signals to CNN Core
-    wire [12:0] core_axi_waddr_w;
-    wire [79:0] core_axi_wdata_w;
+    wire [19:0] core_axi_waddr_w;
+    wire [15:0] core_axi_wdata_w;
     wire        core_axi_wvalid_w;
 
-    wire [12:0] core_axi_raddr_w;
+    wire [19:0] core_axi_raddr_w;
     wire        core_axi_arvalid_w;
-    wire [79:0] core_axi_rdata_w;
-
-    // Multiplexer logic for AXI Read Sharing
-    assign core_axi_raddr_w   = argmax_busy_w ? argmax_axi_raddr_w   : bridge_axi_raddr_w;
-    assign core_axi_arvalid_w = argmax_busy_w ? argmax_axi_arvalid_w : bridge_axi_arvalid_w;
-
-    // Direct write routing from bridge
-    assign core_axi_waddr_w   = bridge_axi_waddr_w;
-    assign core_axi_wdata_w   = bridge_axi_wdata_w;
-    assign core_axi_wvalid_w  = bridge_axi_wvalid_w;
+    wire [15:0] core_axi_rdata_w;
 
     uart_to_axi_bridge #(
-        .AWIDTH(10),
-        .AXI_WADDR_WIDTH(13),
-        .AXI_RADDR_WIDTH(13),
-        .AXI_WDATA_DWIDTH(80),
-        .AXI_RDATA_DWIDTH(80)
+        .AWIDTH(16),
+        .AXI_WADDR_WIDTH(20),
+        .AXI_RADDR_WIDTH(20),
+        .AXI_WDATA_DWIDTH(16),
+        .AXI_RDATA_DWIDTH(16)
     ) u_uart_to_axi_bridge (
         .CLK(CLK),
         .RST(rst_n),
@@ -94,11 +73,11 @@ module top_level #(
         .tx_data_o(tx_data_w),
         .tx_start_o(tx_start_w),
         .tx_busy_i(tx_busy_w),
-        .axi_waddr_o(bridge_axi_waddr_w),
-        .axi_wdata_o(bridge_axi_wdata_w),
-        .axi_wvalid_o(bridge_axi_wvalid_w),
-        .axi_raddr_o(bridge_axi_raddr_w),
-        .axi_arvalid_o(bridge_axi_arvalid_w),
+        .axi_waddr_o(core_axi_waddr_w),
+        .axi_wdata_o(core_axi_wdata_w),
+        .axi_wvalid_o(core_axi_wvalid_w),
+        .axi_raddr_o(core_axi_raddr_w),
+        .axi_arvalid_o(core_axi_arvalid_w),
         .axi_rdata_i(core_axi_rdata_w),
         .bridge_active_o()
     );
@@ -108,16 +87,15 @@ module top_level #(
     //================================================================//
     wire [2:0] cnn_state_w;
     wire       cnn_complete_w;
+    wire [3:0] predicted_digit_w;
+    wire       predicted_valid_w;
 
     cnn_core #(
-        .AWIDTH(10),
+        .AXI_ADDR_WIDTH(20),
+        .AXI_DATA_DWIDTH(16),
+        .AWIDTH(16),
         .DWIDTH(16),
-        .INST_DWIDTH(64),
-        .AXI_WADDR_WIDTH(13),
-        .AXI_RADDR_WIDTH(13),
-        .AXI_WDATA_DWIDTH(80),
-        .AXI_RDATA_DWIDTH(80),
-        .FRAC_BITS(8)
+        .NBANKS(5)
     ) u_cnn_core (
         .CLK(CLK),
         .RST(rst_n),
@@ -126,33 +104,11 @@ module top_level #(
         .axi_wvalid_i(core_axi_wvalid_w),
         .axi_raddr_i(core_axi_raddr_w),
         .axi_arvalid_i(core_axi_arvalid_w),
-        .axi_rdata_o(core_axi_rdata_w)
-    );
-
-    // Connect CNN state wires
-    assign cnn_state_w    = u_cnn_core.state_w;
-    assign cnn_complete_w = u_cnn_core.complete_w;
-
-    //================================================================//
-    // Argmax Logic
-    //================================================================//
-    wire [3:0] predicted_digit_w;
-    wire       predicted_valid_w;
-
-    argmax_unit #(
-        .AWIDTH(10),
-        .AXI_RADDR_WIDTH(13),
-        .AXI_RDATA_DWIDTH(80)
-    ) u_argmax_unit (
-        .CLK(CLK),
-        .RST(rst_n),
-        .inference_done_i(cnn_complete_w),
-        .axi_rdata_i(core_axi_rdata_w),
-        .axi_raddr_o(argmax_axi_raddr_w),
-        .axi_arvalid_o(argmax_axi_arvalid_w),
-        .predicted_digit_o(predicted_digit_w),
-        .predicted_valid_o(predicted_valid_w),
-        .argmax_busy_o(argmax_busy_w)
+        .axi_rdata_o(core_axi_rdata_w),
+        .predict_valid_o(predicted_valid_w),
+        .predict_value_o(predicted_digit_w),
+        .state_o(cnn_state_w),
+        .done_o(cnn_complete_w)
     );
 
     //================================================================//

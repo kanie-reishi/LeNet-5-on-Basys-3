@@ -11,8 +11,11 @@ Software/model/checkpoint/
 *.log
 sim_output*.txt
 sim_output*.log
+*.xlsx
 
 # Checkpoints and datasets
 checkpoint/
 data/
 weights/
+Fixed_AI_Accelerator/
+Basys3-Real-Time-Digit-Recognise/

@@ -1,11 +1,11 @@
 `timescale 1 ns / 1 ps
 
 module uart_to_axi_bridge #(
-    parameter int AWIDTH           = 10,
-    parameter int AXI_WADDR_WIDTH  = 13,
-    parameter int AXI_RADDR_WIDTH  = 13,
-    parameter int AXI_WDATA_DWIDTH = 80,
-    parameter int AXI_RDATA_DWIDTH = 80
+    parameter int AWIDTH           = 16,
+    parameter int AXI_WADDR_WIDTH  = 19,
+    parameter int AXI_RADDR_WIDTH  = 19,
+    parameter int AXI_WDATA_DWIDTH = 16,
+    parameter int AXI_RDATA_DWIDTH = 16
 )(
     input  logic                          CLK,
     input  logic                          RST, // Active-low asynchronous reset
@@ -91,7 +91,7 @@ module uart_to_axi_bridge #(
 
     assign bridge_active_o = (rx_state_r != s_IDLE);
 
-    wire [15:0] parsed_addr_w = {payload_r[0], payload_r[1]};
+    wire [23:0] parsed_addr_w = {payload_r[0], payload_r[1], payload_r[2]};
 
     // TX Packet registers
     logic [7:0]  tx_cmd_r;
@@ -201,12 +201,10 @@ module uart_to_axi_bridge #(
                 s_EXECUTE: begin
                     case (cmd_r)
                         8'h01: begin // WRITE_MEM
-                            // payload[0:1] = address
-                            // payload[2:11] = 80-bit data
+                            // payload[0:2] = 24-bit address (19 bits active)
+                            // payload[3:4] = 16-bit data
                             axi_waddr_r  <= parsed_addr_w[AXI_WADDR_WIDTH-1:0];
-                            axi_wdata_r  <= {payload_r[2], payload_r[3], payload_r[4], payload_r[5], 
-                                             payload_r[6], payload_r[7], payload_r[8], payload_r[9], 
-                                             payload_r[10], payload_r[11]};
+                            axi_wdata_r  <= {payload_r[3], payload_r[4]};
                             axi_wvalid_r <= 1'b1;
                             rx_state_r   <= s_SEND_ACK;
                         end
@@ -218,14 +216,16 @@ module uart_to_axi_bridge #(
                         end
 
                         8'h03: begin // START_INFERENCE
-                            axi_waddr_r  <= 13'h0400; // AXI_WADDR_START << 10
-                            axi_wdata_r  <= 80'h1;
+                            // Write 16'h0001 to W_START address space (top 3 bits = 3'd1)
+                            axi_waddr_r  <= {3'd1, {(AXI_WADDR_WIDTH-3){1'b0}}};
+                            axi_wdata_r  <= 16'h0001;
                             axi_wvalid_r <= 1'b1;
                             rx_state_r   <= s_SEND_ACK;
                         end
 
                         8'h04: begin // CHECK_STATUS
-                            axi_raddr_r   <= 13'h0C00; // AXI_RADDR_STATE << 10
+                            // Read from status (R_STATUS is 3'd0)
+                            axi_raddr_r   <= {3'd0, {(AXI_RADDR_WIDTH-3){1'b0}}};
                             axi_arvalid_r <= 1'b1;
                             rx_state_r    <= s_WAIT_STATUS;
                         end
@@ -237,26 +237,19 @@ module uart_to_axi_bridge #(
                 end
 
                 s_WAIT_READ: begin
-                    // Read data is available from AXI on this cycle
+                    // Read data is available from AXI on this cycle (16 bits)
                     tx_cmd_r           <= 8'h02;
-                    tx_len_r           <= 16'd10;
-                    tx_payload_r[0]    <= axi_rdata_i[79:72];
-                    tx_payload_r[1]    <= axi_rdata_i[71:64];
-                    tx_payload_r[2]    <= axi_rdata_i[63:56];
-                    tx_payload_r[3]    <= axi_rdata_i[55:48];
-                    tx_payload_r[4]    <= axi_rdata_i[47:40];
-                    tx_payload_r[5]    <= axi_rdata_i[39:32];
-                    tx_payload_r[6]    <= axi_rdata_i[31:24];
-                    tx_payload_r[7]    <= axi_rdata_i[23:16];
-                    tx_payload_r[8]    <= axi_rdata_i[15:8];
-                    tx_payload_r[9]    <= axi_rdata_i[7:0];
+                    tx_len_r           <= 16'd2;
+                    tx_payload_r[0]    <= axi_rdata_i[15:8];
+                    tx_payload_r[1]    <= axi_rdata_i[7:0];
                     rx_state_r         <= s_TX_PACKET;
                 end
 
                 s_WAIT_STATUS: begin
                     tx_cmd_r           <= 8'h04;
-                    tx_len_r           <= 16'd1;
-                    tx_payload_r[0]    <= axi_rdata_i[7:0]; // Controller State
+                    tx_len_r           <= 16'd2;
+                    tx_payload_r[0]    <= axi_rdata_i[15:8];
+                    tx_payload_r[1]    <= axi_rdata_i[7:0];
                     rx_state_r         <= s_TX_PACKET;
                 end
 

@@ -128,44 +128,100 @@ module tb_Top;
         
         $display("\n--- [START] tb_Top wrapper simulation ---");
         
-        // 0. Send LOAD command (WRITE_MEM to address 0 to transition to s_LOAD)
-        tb_payload[0] = 8'h00; // Address H
-        tb_payload[1] = 8'h00; // Address L
-        tb_payload[2] = 8'h00; tb_payload[3] = 8'h00;
-        tb_payload[4] = 8'h00; tb_payload[5] = 8'h00; tb_payload[6] = 8'h00; tb_payload[7] = 8'h00;
-        tb_payload[8] = 8'h00; tb_payload[9] = 8'h00; tb_payload[10] = 8'h00; tb_payload[11] = 8'h01;
-        send_uart_packet(8'h01, 16'd12); // WRITE_MEM to address 0 (LOAD)
-        #200000;
-
-        // 1. Send instruction write packet (WRITE_MEM to Instruction memory)
-        // Target address inside IM: AXI_WADDR_INST = 7 -> addr = 13'h1C00 (7 << 10) = 7168
-        tb_payload[0] = 8'h1C; // Address H
-        tb_payload[1] = 8'h00; // Address L
-        // Data: 80'h000000001002000100651001 (padded C1 instruction)
-        tb_payload[2] = 8'h00; tb_payload[3] = 8'h00;
-        tb_payload[4] = 8'h10; tb_payload[5] = 8'h02; tb_payload[6] = 8'h00; tb_payload[7] = 8'h01;
-        tb_payload[8] = 8'h00; tb_payload[9] = 8'h65; tb_payload[10] = 8'h10; tb_payload[11] = 8'h01;
+        // 1. Write to Bias Memory via UART
+        // W_BIAS is region 6 -> address 24'h0C0000 (region 6, word address 0)
+        // Data = 16'hA5A5
+        tb_payload[0] = 8'h0C; // Address [23:16]
+        tb_payload[1] = 8'h00; // Address [15:8]
+        tb_payload[2] = 8'h00; // Address [7:0]
+        tb_payload[3] = 8'hA5; // Data [15:8]
+        tb_payload[4] = 8'hA5; // Data [7:0]
+        send_uart_packet(8'h01, 16'd5); // WRITE_MEM
+        #250000; // Wait for transmission and bridge write
         
-        send_uart_packet(8'h01, 16'd12); // WRITE_MEM
-        #200000; // Wait for transmission and bridge write
-        
-        // Verify write in Instruction Memory BRAM
-        if (u_top_level.u_cnn_core.u_instruction_memory.u_instruction_mem.mem[0] === 64'h1002000100651001) begin
-            $display("[PASS] Instruction Memory loaded correctly through UART!");
+        // Verify write in Bias Memory
+        if (u_top_level.u_cnn_core.u_bias_memory.u_bias_bank.mem[0] === 16'hA5A5) begin
+            $display("[PASS] Bias Memory loaded correctly through UART!");
         end else begin
-            $display("[FAIL] Instruction Memory mismatch! Got: %h", u_top_level.u_cnn_core.u_instruction_memory.u_instruction_mem.mem[0]);
+            $display("[FAIL] Bias Memory mismatch! Got: %h", u_top_level.u_cnn_core.u_bias_memory.u_bias_bank.mem[0]);
         end
         
-        // 2. Send START_INFERENCE command packet
-        send_uart_packet(8'h03, 16'd0);
-        #100000;
+        // 2. Write 5 words to Ping FM memory to trigger packed BRAM write (W_PING_FM is region 3)
+        // Word 0: 24'h060000, Data = 16'h1111
+        tb_payload[0] = 8'h06; tb_payload[1] = 8'h00; tb_payload[2] = 8'h00;
+        tb_payload[3] = 8'h11; tb_payload[4] = 8'h11;
+        send_uart_packet(8'h01, 16'd5);
+        #250000;
+
+        // Word 1: 24'h060001, Data = 16'h2222
+        tb_payload[0] = 8'h06; tb_payload[1] = 8'h00; tb_payload[2] = 8'h01;
+        tb_payload[3] = 8'h22; tb_payload[4] = 8'h22;
+        send_uart_packet(8'h01, 16'd5);
+        #250000;
+
+        // Word 2: 24'h060002, Data = 16'h3333
+        tb_payload[0] = 8'h06; tb_payload[1] = 8'h00; tb_payload[2] = 8'h02;
+        tb_payload[3] = 8'h33; tb_payload[4] = 8'h33;
+        send_uart_packet(8'h01, 16'd5);
+        #250000;
+
+        // Word 3: 24'h060003, Data = 16'h4444
+        tb_payload[0] = 8'h06; tb_payload[1] = 8'h00; tb_payload[2] = 8'h03;
+        tb_payload[3] = 8'h44; tb_payload[4] = 8'h44;
+        send_uart_packet(8'h01, 16'd5);
+        #250000;
+
+        // Word 4: 24'h060004, Data = 16'h5555
+        tb_payload[0] = 8'h06; tb_payload[1] = 8'h00; tb_payload[2] = 8'h04;
+        tb_payload[3] = 8'h55; tb_payload[4] = 8'h55;
+        send_uart_packet(8'h01, 16'd5);
+        #250000;
+
+        // Verify writes in Ping FM Bank Memories (5 banks)
+        if (u_top_level.u_cnn_core.u_ping_fm_memory.FM_BANK[0].u_fm_bank.mem[0] === 16'h1111 &&
+            u_top_level.u_cnn_core.u_ping_fm_memory.FM_BANK[1].u_fm_bank.mem[0] === 16'h2222 &&
+            u_top_level.u_cnn_core.u_ping_fm_memory.FM_BANK[2].u_fm_bank.mem[0] === 16'h3333 &&
+            u_top_level.u_cnn_core.u_ping_fm_memory.FM_BANK[3].u_fm_bank.mem[0] === 16'h4444 &&
+            u_top_level.u_cnn_core.u_ping_fm_memory.FM_BANK[4].u_fm_bank.mem[0] === 16'h5555) begin
+            $display("[PASS] Ping FM Memory packed words loaded correctly through UART!");
+        end else begin
+            $display("[FAIL] Ping FM Memory mismatch!");
+            $display("  Bank 0: %h", u_top_level.u_cnn_core.u_ping_fm_memory.FM_BANK[0].u_fm_bank.mem[0]);
+            $display("  Bank 1: %h", u_top_level.u_cnn_core.u_ping_fm_memory.FM_BANK[1].u_fm_bank.mem[0]);
+            $display("  Bank 2: %h", u_top_level.u_cnn_core.u_ping_fm_memory.FM_BANK[2].u_fm_bank.mem[0]);
+            $display("  Bank 3: %h", u_top_level.u_cnn_core.u_ping_fm_memory.FM_BANK[3].u_fm_bank.mem[0]);
+            $display("  Bank 4: %h", u_top_level.u_cnn_core.u_ping_fm_memory.FM_BANK[4].u_fm_bank.mem[0]);
+        end
+
+        // 3. Send LOAD command: WRITE_MEM to W_LOAD_CTRL
+        // W_LOAD_CTRL is region 0 -> address 24'h000000 (region 0, word address 0)
+        // Data = 16'h0001
+        tb_payload[0] = 8'h00; // Address [23:16]
+        tb_payload[1] = 8'h00; // Address [15:8]
+        tb_payload[2] = 8'h00; // Address [7:0]
+        tb_payload[3] = 8'h00; // Data [15:8]
+        tb_payload[4] = 8'h01; // Data [7:0]
+        send_uart_packet(8'h01, 16'd5); // WRITE_MEM
+        #250000;
+
+        // Verify state is S_WAIT_LOAD (1)
+        $display("[INFO] Active FSM State of CNN Controller after LOAD: %d", u_top_level.u_cnn_core.state_o);
+        if (u_top_level.u_cnn_core.state_o == 3'd1) begin
+            $display("[PASS] CNN Controller transitioned to S_WAIT_LOAD!");
+        end else begin
+            $display("[FAIL] CNN Controller state mismatch! Got: %d", u_top_level.u_cnn_core.state_o);
+        end
         
-        // Verify state is s_LOAD or s_FETCH
-        $display("[INFO] Active FSM State of CNN Controller: %d", u_top_level.u_cnn_core.state_w);
-        if (u_top_level.u_cnn_core.state_w != 3'd0) begin
+        // 4. Send START_INFERENCE command packet
+        send_uart_packet(8'h03, 16'd0);
+        #150000;
+        
+        // Verify state transitioned past S_WAIT_LOAD
+        $display("[INFO] Active FSM State of CNN Controller after START: %d", u_top_level.u_cnn_core.state_o);
+        if (u_top_level.u_cnn_core.state_o != 3'd0 && u_top_level.u_cnn_core.state_o != 3'd1) begin
             $display("[PASS] CNN Controller started execution after UART START command!");
         end else begin
-            $display("[FAIL] CNN Controller is still IDLE!");
+            $display("[FAIL] CNN Controller is still IDLE or S_WAIT_LOAD!");
         end
         
         #200000;

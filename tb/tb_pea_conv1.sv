@@ -182,6 +182,7 @@ module tb_pea_conv1;
     integer pass;
     integer error_count;
     integer match_count;
+    integer psum_file;
 
     // Output capture logic
     always @(negedge CLK) begin: output_capture
@@ -262,6 +263,12 @@ module tb_pea_conv1;
         $readmemh("hex_conv1/weight.hex", weight_ram);
         $readmemh("hex_conv1/bias.hex", bias_ram);
         $readmemh("hex_conv1/expected_ofm.hex", expected_ofm_ram);
+
+        psum_file = $fopen("data/hw_psums.txt", "w");
+        if (psum_file == 0) begin
+            $display("[ERROR] Failed to open data/hw_psums.txt");
+            $finish;
+        end
 
         $display("[INFO] Hex memories loaded successfully.");
 
@@ -449,6 +456,7 @@ module tb_pea_conv1;
             $display("==================================================\n");
         end
 
+        $fclose(psum_file);
         $finish;
     end
 
@@ -489,9 +497,9 @@ module tb_pea_conv1;
                         end
                         if (u_pea.gen_row[r].gen_col[c].u_pe.ifmap_valid_w) begin
                             if (step_cnt < 25) begin
-                                $display("[PSUM] pass=%0d y=%0d x_base=%0d row=%0d col=%0d step=%0d | acc=%d", 
-                                         pass, out_y, out_x_base, r, c, step_cnt, 
-                                         $signed(u_pea.gen_row[r].gen_col[c].u_pe.accumulator_w));
+                                $fdisplay(psum_file, "[PSUM] pass=%0d y=%0d x_base=%0d row=%0d col=%0d step=%0d | acc=%d", 
+                                          pass, out_y, out_x_base, r, c, step_cnt, 
+                                          $signed(u_pea.gen_row[r].gen_col[c].u_pe.accumulator_w));
                             end
                             step_cnt = step_cnt + 1;
                         end
