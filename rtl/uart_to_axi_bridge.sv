@@ -5,7 +5,8 @@ module uart_to_axi_bridge #(
     parameter int AXI_WADDR_WIDTH  = 19,
     parameter int AXI_RADDR_WIDTH  = 19,
     parameter int AXI_WDATA_DWIDTH = 16,
-    parameter int AXI_RDATA_DWIDTH = 16
+    parameter int AXI_RDATA_DWIDTH = 16,
+    parameter int MAX_RX_PAYLOAD   = 64
 )(
     input  logic                          CLK,
     input  logic                          RST, // Active-low asynchronous reset
@@ -47,10 +48,14 @@ module uart_to_axi_bridge #(
         s_WAIT_STATUS      = 4'd9,
         s_SEND_ACK         = 4'd10,
         s_SEND_NACK        = 4'd11,
-        s_TX_PACKET        = 4'd12
+        s_TX_PACKET        = 4'd12,
+        s_BURST_WRITE      = 4'd13
     } rx_state_t;
 
     rx_state_t rx_state_r;
+
+    localparam int MAX_BURST_WORDS = (MAX_RX_PAYLOAD - 4) / 2;
+    localparam int PAYLOAD_IDX_W     = $clog2(MAX_RX_PAYLOAD);
 
     // TX Packet FSM States
     typedef enum logic [3:0] {
@@ -71,7 +76,7 @@ module uart_to_axi_bridge #(
     // Registers for RX Packet parsing
     logic [7:0]  cmd_r;
     logic [15:0] len_r;
-    logic [7:0]  payload_r [0:15];
+    logic [7:0]  payload_r [0:MAX_RX_PAYLOAD-1];
     logic [15:0] pld_idx_r;
     logic [7:0]  chk_sum_r;
     logic [7:0]  expected_chk_sum_r;
@@ -82,6 +87,10 @@ module uart_to_axi_bridge #(
     logic                        axi_wvalid_r;
     logic [AXI_RADDR_WIDTH-1:0]  axi_raddr_r;
     logic                        axi_arvalid_r;
+
+    logic [AXI_WADDR_WIDTH-1:0]  burst_addr_r;
+    logic [7:0]                  burst_total_r;
+    logic [7:0]                  burst_idx_r;
 
     assign axi_waddr_o   = axi_waddr_r;
     assign axi_wdata_o   = axi_wdata_r;
@@ -120,7 +129,10 @@ module uart_to_axi_bridge #(
             axi_wvalid_r        <= 1'b0;
             axi_raddr_r         <= {AXI_RADDR_WIDTH{1'b0}};
             axi_arvalid_r       <= 1'b0;
-            for (int i = 0; i < 16; i++) begin
+            burst_addr_r        <= {AXI_WADDR_WIDTH{1'b0}};
+            burst_total_r       <= 8'd0;
+            burst_idx_r         <= 8'd0;
+            for (int i = 0; i < MAX_RX_PAYLOAD; i++) begin
                 payload_r[i]    <= 8'd0;
             end
         end else begin
@@ -168,12 +180,12 @@ module uart_to_axi_bridge #(
 
                 s_PAYLOAD: begin
                     if (rx_valid_i) begin
-                        if (pld_idx_r < 16'd16) begin
-                            payload_r[pld_idx_r[3:0]] <= rx_data_i;
+                        if (pld_idx_r < MAX_RX_PAYLOAD) begin
+                            payload_r[pld_idx_r[PAYLOAD_IDX_W-1:0]] <= rx_data_i;
                         end
                         chk_sum_r <= chk_sum_r ^ rx_data_i;
-                        
-                        if (pld_idx_r == len_r - 16'd1) begin
+
+                        if (pld_idx_r == (len_r - 16'd1)) begin
                             rx_state_r <= s_CHECKSUM;
                         end else begin
                             pld_idx_r <= pld_idx_r + 16'd1;
@@ -207,6 +219,27 @@ module uart_to_axi_bridge #(
                             axi_wdata_r  <= {payload_r[3], payload_r[4]};
                             axi_wvalid_r <= 1'b1;
                             rx_state_r   <= s_SEND_ACK;
+                        end
+
+                        8'h05: begin // BURST_WRITE_MEM
+                            // payload[0:2] = base address
+                            // payload[3]   = word count (1..MAX_BURST_WORDS)
+                            // payload[4+]  = 16-bit words (big-endian)
+                            if (payload_r[3] < 8'd1 || payload_r[3] > 8'(MAX_BURST_WORDS)) begin
+                                rx_state_r <= s_SEND_NACK;
+                            end else begin
+                                burst_addr_r  <= parsed_addr_w[AXI_WADDR_WIDTH-1:0];
+                                burst_total_r <= payload_r[3];
+                                burst_idx_r   <= 8'd1;
+                                axi_waddr_r   <= parsed_addr_w[AXI_WADDR_WIDTH-1:0];
+                                axi_wdata_r   <= {payload_r[4], payload_r[5]};
+                                axi_wvalid_r  <= 1'b1;
+                                if (payload_r[3] == 8'd1) begin
+                                    rx_state_r <= s_SEND_ACK;
+                                end else begin
+                                    rx_state_r <= s_BURST_WRITE;
+                                end
+                            end
                         end
                         
                         8'h02: begin // READ_MEM
@@ -251,6 +284,21 @@ module uart_to_axi_bridge #(
                     tx_payload_r[0]    <= axi_rdata_i[15:8];
                     tx_payload_r[1]    <= axi_rdata_i[7:0];
                     rx_state_r         <= s_TX_PACKET;
+                end
+
+                s_BURST_WRITE: begin
+                    axi_waddr_r  <= burst_addr_r + {{(AXI_WADDR_WIDTH-8){1'b0}}, burst_idx_r};
+                    axi_wdata_r  <= {
+                        payload_r[4 + (burst_idx_r << 1)],
+                        payload_r[5 + (burst_idx_r << 1)]
+                    };
+                    axi_wvalid_r <= 1'b1;
+
+                    if (burst_idx_r >= (burst_total_r - 8'd1)) begin
+                        rx_state_r <= s_SEND_ACK;
+                    end else begin
+                        burst_idx_r <= burst_idx_r + 8'd1;
+                    end
                 end
 
                 s_SEND_ACK: begin

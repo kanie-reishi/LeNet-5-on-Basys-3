@@ -2,7 +2,7 @@
 
 module top_level #(
     parameter int CLK_FREQ_HZ = 100_000_000,
-    parameter int BAUD_RATE   = 115200
+    parameter int BAUD_RATE   = 921_600
 )(
     input  logic       CLK,     // 100 MHz oscillator pin W5
     input  logic       btnC,    // Center button for reset (active-high)
@@ -64,7 +64,8 @@ module top_level #(
         .AXI_WADDR_WIDTH(20),
         .AXI_RADDR_WIDTH(20),
         .AXI_WDATA_DWIDTH(16),
-        .AXI_RDATA_DWIDTH(16)
+        .AXI_RDATA_DWIDTH(16),
+        .MAX_RX_PAYLOAD(64)
     ) u_uart_to_axi_bridge (
         .CLK(CLK),
         .RST(rst_n),
