@@ -235,17 +235,13 @@ module Global_Arbiter #(
     assign ping_fm_raddr_o   = {MEM_ADDR_WIDTH{1'b0}};
     assign pong_fm_raddr_o   = {MEM_ADDR_WIDTH{1'b0}};
 
-    always @(posedge CLK or negedge RST) begin
-        if (!RST) begin
-            axi_rdata_o <= {AXI_DATA_DWIDTH{1'b0}};
-        end
-        else begin
-            if (axi_arvalid_i) begin
-                axi_rdata_o      <= {AXI_DATA_DWIDTH{1'b0}};
-                axi_rdata_o[0]   <= predict_valid_i;
-                axi_rdata_o[4:1] <= predict_value_i;
-            end
-        end
+    // Any AXI read returns (combinational — UART bridge samples after pipeline delay):
+    //   bit [0]   : predict_valid_i
+    //   bit [4:1] : predict_value_i
+    always_comb begin
+        axi_rdata_o        = {AXI_DATA_DWIDTH{1'b0}};
+        axi_rdata_o[0]     = predict_valid_i;
+        axi_rdata_o[4:1]   = predict_value_i;
     end
 
 endmodule

@@ -29,6 +29,7 @@ from uart_host import (
     read_input_hex_file,
     read_mnist_sample,
     run_inference,
+    set_burst_writes,
 )
 
 
@@ -61,6 +62,7 @@ class UartHostApp:
         self.elapsed_var = tk.StringVar(value="")
         self.weights_status_var = tk.StringVar(value="Weights: not loaded this session")
         self.fast_mode_var = tk.BooleanVar(value=False)
+        self.no_burst_var = tk.BooleanVar(value=False)
 
         self.draw_buffer = [0] * 784
         self.last_draw_cell: tuple[int, int] | None = None
@@ -211,6 +213,12 @@ class UartHostApp:
             text="Fast mode — skip weight reload (~1–2 s per run)",
             variable=self.fast_mode_var,
         ).pack(anchor=tk.W)
+        ttk.Checkbutton(
+            options_frame,
+            text="Disable burst writes (slower, use if predictions look wrong)",
+            variable=self.no_burst_var,
+            command=self._on_burst_option_changed,
+        ).pack(anchor=tk.W, pady=(2, 0))
         ttk.Label(
             options_frame,
             text="Load weights once after power-on, then enable fast mode for draw/test loops.",
@@ -336,6 +344,11 @@ class UartHostApp:
         canvas_state = tk.DISABLED if busy or self.input_mode_var.get() != "draw" else tk.NORMAL
         self.preview_canvas.configure(state=canvas_state)
 
+    def _on_burst_option_changed(self) -> None:
+        set_burst_writes(not self.no_burst_var.get())
+        mode = "single-word" if self.no_burst_var.get() else "burst"
+        self.append_log(f"[UI] UART writes: {mode} mode")
+
     def start_weight_load(self) -> None:
         if self.worker and self.worker.is_alive():
             return
@@ -352,7 +365,9 @@ class UartHostApp:
         self.set_busy(True)
         self.progress["value"] = 0
         self.status_var.set("Loading weights...")
-        self.append_log("[UI] Uploading weights/biases to FPGA (one-time, ~30–90 s at 921600 + burst)...")
+        set_burst_writes(not self.no_burst_var.get())
+        burst_note = "single-word" if self.no_burst_var.get() else "burst"
+        self.append_log(f"[UI] Uploading weights/biases to FPGA ({burst_note} mode)...")
 
         ser = self.serial_port
 
@@ -557,6 +572,7 @@ class UartHostApp:
         self.status_var.set("Running...")
         self.result_var.set("…")
         self.elapsed_var.set("")
+        set_burst_writes(not self.no_burst_var.get())
         if reload_weights:
             self.append_log("[UI] Starting full inference workflow (includes weight upload)...")
         else:

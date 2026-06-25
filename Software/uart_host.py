@@ -313,22 +313,100 @@ def reset_fpga_inference_state(
     drain_serial_input(ser)
 
 
+def decode_status_word(status_word: int) -> tuple[bool, int]:
+    """Decode 16-bit FPGA status: bit0=valid, bits[4:1]=digit."""
+    valid = bool(status_word & 0x01)
+    prediction = (status_word >> 1) & 0x0F
+    # Legacy bitstreams may return the digit in [4:1] without setting bit 0.
+    if not valid and prediction <= 9 and (status_word & 0x1E):
+        valid = True
+    return valid, prediction
+
+
 def poll_inference_status(
     ser: serial.Serial,
     on_log: Optional[LogCallback] = None,
 ) -> Optional[tuple[bool, int]]:
     packet = create_uart_packet(CMD_CHECK_STATUS, [])
     ser.write(packet)
+    time.sleep(0.005)
 
-    frame = read_uart_response_packet(ser, CMD_CHECK_STATUS, timeout=0.5)
+    frame = read_uart_response_packet(ser, CMD_CHECK_STATUS, timeout=1.5)
+    if frame is None:
+        frame = read_uart_response_packet(ser, timeout=0.25)
+        if frame is not None and on_log:
+            on_log(f"[HOST] Status poll: got unexpected frame {frame.hex()}")
+
     if frame is None:
         return None
 
+    if frame[1] != CMD_CHECK_STATUS and on_log:
+        on_log(f"[HOST] Status poll: wrong cmd in frame {frame.hex()}")
+
     status_word = (frame[4] << 8) | frame[5]
-    valid = bool(status_word & 0x01)
-    prediction = (status_word >> 1) & 0x0F
+    valid, prediction = decode_status_word(status_word)
+
+    if on_log:
+        on_log(
+            f"[HOST] Status poll: raw={frame.hex()} "
+            f"word=0x{status_word:04X} valid={int(valid)} pred={prediction}"
+        )
+
     return valid, prediction
 
+
+def read_mem_word(
+    ser: serial.Serial,
+    region: int,
+    offset: int,
+    on_log: Optional[LogCallback] = None,
+) -> Optional[int]:
+    addr_24 = (region << 17) | (offset & 0x1FFFF)
+    payload = [
+        (addr_24 >> 16) & 0xFF,
+        (addr_24 >> 8) & 0xFF,
+        addr_24 & 0xFF,
+    ]
+    ser.write(create_uart_packet(CMD_READ_MEM, payload))
+    time.sleep(0.005)
+
+    frame = read_uart_response_packet(ser, CMD_READ_MEM, timeout=1.5)
+    if frame is None:
+        if on_log:
+            on_log(f"[HOST] Read timeout at region={region} offset={offset}")
+        return None
+
+    word = (frame[4] << 8) | frame[5]
+    if on_log:
+        on_log(f"[HOST] Read region={region} offset={offset} -> 0x{word:04X}")
+    return word
+
+
+def verify_weight_word(
+    ser: serial.Serial,
+    file_path: str,
+    region: int,
+    offset: int,
+    on_log: Optional[LogCallback] = None,
+) -> bool:
+    with open(file_path, "r", encoding="utf-8") as handle:
+        expected = int(handle.readline().strip(), 16) & 0xFFFF
+
+    actual = read_mem_word(ser, region, offset, on_log=on_log)
+    if actual is None:
+        return False
+
+    if actual != expected:
+        if on_log:
+            on_log(
+                f"[HOST] Weight mismatch at {os.path.basename(file_path)}[{offset}]: "
+                f"expected 0x{expected:04X}, read 0x{actual:04X}"
+            )
+        return False
+
+    if on_log:
+        on_log(f"[HOST] Weight verify OK: {os.path.basename(file_path)}[{offset}] = 0x{expected:04X}")
+    return True
 
 def write_mem_word(
     ser: serial.Serial,
@@ -732,13 +810,19 @@ def run_inference(
     try:
         reset_fpga_inference_state(ser, on_log=on_log)
 
-        progress("Preparing FPGA", 0.02)
-        log("[HOST] Transitioning FSM to S_WAIT_LOAD...")
-        if not write_mem_word(ser, W_LOAD_CTRL, 0, 1, on_log=on_log):
-            return InferenceResult(False, message="Failed to send LOAD command.")
+        if reload_weights:
+            load_all_weights(
+                ser,
+                param_dir,
+                on_log=log,
+                on_progress=progress,
+                should_cancel=should_cancel,
+            )
+            if cancelled():
+                return InferenceResult(False, message="Cancelled.")
 
-        if cancelled():
-            return InferenceResult(False, message="Cancelled.")
+        else:
+            log("[HOST] Skipping weight reload (fast mode). Using weights already in FPGA memory.")
 
         progress("Loading input image", 0.08)
         if input_pixels is not None:
@@ -750,17 +834,13 @@ def run_inference(
         if cancelled():
             return InferenceResult(False, message="Cancelled.")
 
-        if reload_weights:
-            load_all_weights(
-                ser,
-                param_dir,
-                on_log=log,
-                on_progress=progress,
-                should_cancel=should_cancel,
-            )
-        else:
-            log("[HOST] Skipping weight reload (fast mode). Using weights already in FPGA memory.")
-            progress("Using cached weights", 0.15)
+        progress("Preparing FPGA", 0.15)
+        log("[HOST] Transitioning FSM to S_WAIT_LOAD (TB sequence)...")
+        if not write_mem_word(ser, W_LOAD_CTRL, 0, 1, on_log=on_log):
+            return InferenceResult(False, message="Failed to send LOAD command.")
+
+        if not reload_weights:
+            log("[HOST] Fast mode: using weights already in FPGA BRAM.")
 
         if cancelled():
             return InferenceResult(False, message="Cancelled.")
@@ -779,10 +859,10 @@ def run_inference(
             if cancelled():
                 return InferenceResult(False, message="Cancelled.")
 
-            status = poll_inference_status(ser, on_log=on_log)
+            status = poll_inference_status(ser, on_log=on_log if poll < 3 or poll % 20 == 0 else None)
             if status is None:
                 if on_log and poll % 20 == 0:
-                    log(f"[HOST] Waiting for FPGA result... (poll {poll + 1})")
+                    log(f"[HOST] No UART status response yet (poll {poll + 1})")
                 time.sleep(0.05)
                 continue
 
@@ -792,6 +872,15 @@ def run_inference(
                 break
 
             time.sleep(0.05)
+
+        if prediction < 0:
+            # One final poll after a short settle (display may show result before UART path)
+            time.sleep(0.15)
+            status = poll_inference_status(ser, on_log=on_log)
+            if status is not None:
+                valid, pred_val = status
+                if valid:
+                    prediction = pred_val
 
         drain_serial_input(ser)
         if not write_mem_word(ser, W_DONE_CLR, 0, 1, on_log=on_log):

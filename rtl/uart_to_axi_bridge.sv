@@ -44,12 +44,13 @@ module uart_to_axi_bridge #(
         s_CHECKSUM         = 4'd5,
         s_ETX              = 4'd6,
         s_EXECUTE          = 4'd7,
-        s_WAIT_READ        = 4'd8,
+        s_WAIT_AXI         = 4'd8,
         s_WAIT_STATUS      = 4'd9,
         s_SEND_ACK         = 4'd10,
         s_SEND_NACK        = 4'd11,
         s_TX_PACKET        = 4'd12,
-        s_BURST_WRITE      = 4'd13
+        s_BURST_WRITE      = 4'd13,
+        s_TX_BUILD         = 4'd14
     } rx_state_t;
 
     rx_state_t rx_state_r;
@@ -91,6 +92,8 @@ module uart_to_axi_bridge #(
     logic [AXI_WADDR_WIDTH-1:0]  burst_addr_r;
     logic [7:0]                  burst_total_r;
     logic [7:0]                  burst_idx_r;
+    logic [AXI_RDATA_DWIDTH-1:0] axi_rdata_hold_r;
+    logic [7:0]                  tx_resp_cmd_r;
 
     assign axi_waddr_o   = axi_waddr_r;
     assign axi_wdata_o   = axi_wdata_r;
@@ -132,6 +135,8 @@ module uart_to_axi_bridge #(
             burst_addr_r        <= {AXI_WADDR_WIDTH{1'b0}};
             burst_total_r       <= 8'd0;
             burst_idx_r         <= 8'd0;
+            axi_rdata_hold_r    <= {AXI_RDATA_DWIDTH{1'b0}};
+            tx_resp_cmd_r       <= 8'd0;
             for (int i = 0; i < MAX_RX_PAYLOAD; i++) begin
                 payload_r[i]    <= 8'd0;
             end
@@ -245,7 +250,8 @@ module uart_to_axi_bridge #(
                         8'h02: begin // READ_MEM
                             axi_raddr_r   <= parsed_addr_w[AXI_RADDR_WIDTH-1:0];
                             axi_arvalid_r <= 1'b1;
-                            rx_state_r    <= s_WAIT_READ;
+                            tx_resp_cmd_r <= 8'h02;
+                            rx_state_r    <= s_WAIT_AXI;
                         end
 
                         8'h03: begin // START_INFERENCE
@@ -260,7 +266,8 @@ module uart_to_axi_bridge #(
                             // Read from status (R_STATUS is 3'd0)
                             axi_raddr_r   <= {3'd0, {(AXI_RADDR_WIDTH-3){1'b0}}};
                             axi_arvalid_r <= 1'b1;
-                            rx_state_r    <= s_WAIT_STATUS;
+                            tx_resp_cmd_r <= 8'h04;
+                            rx_state_r    <= s_WAIT_AXI;
                         end
 
                         default: begin
@@ -269,21 +276,25 @@ module uart_to_axi_bridge #(
                     endcase
                 end
 
-                s_WAIT_READ: begin
-                    // Read data is available from AXI on this cycle (16 bits)
-                    tx_cmd_r           <= 8'h02;
-                    tx_len_r           <= 16'd2;
-                    tx_payload_r[0]    <= axi_rdata_i[15:8];
-                    tx_payload_r[1]    <= axi_rdata_i[7:0];
-                    rx_state_r         <= s_TX_PACKET;
+                s_WAIT_AXI: begin
+                    // One pipeline cycle so status_reg_r is stable after axi_arvalid_i
+                    rx_state_r <= s_WAIT_STATUS;
                 end
 
                 s_WAIT_STATUS: begin
-                    tx_cmd_r           <= 8'h04;
-                    tx_len_r           <= 16'd2;
-                    tx_payload_r[0]    <= axi_rdata_i[15:8];
-                    tx_payload_r[1]    <= axi_rdata_i[7:0];
-                    rx_state_r         <= s_TX_PACKET;
+                    axi_rdata_hold_r <= axi_rdata_i;
+                    tx_cmd_r         <= tx_resp_cmd_r;
+                    tx_len_r         <= 16'd2;
+                    tx_payload_r[0]  <= axi_rdata_i[15:8];
+                    tx_payload_r[1]  <= axi_rdata_i[7:0];
+                    rx_state_r       <= s_TX_BUILD;
+                end
+
+                s_TX_BUILD: begin
+                    // Latch payload from hold register (status_reg settled)
+                    tx_payload_r[0] <= axi_rdata_hold_r[15:8];
+                    tx_payload_r[1] <= axi_rdata_hold_r[7:0];
+                    rx_state_r      <= s_TX_PACKET;
                 end
 
                 s_BURST_WRITE: begin
